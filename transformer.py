@@ -10,7 +10,7 @@ import math
 from torch.nn import TransformerEncoder, TransformerEncoderLayer
 
 # 超参数设置
-BATCH_SIZE = 3
+BATCH_SIZE = 32
 EMBEDDING_DIM = 128
 EVENT_EMBED_DIM = 32
 NUM_HEADS = 8
