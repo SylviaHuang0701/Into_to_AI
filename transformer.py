@@ -8,6 +8,11 @@ from collections import Counter
 import re
 import math
 from torch.nn import TransformerEncoder, TransformerEncoderLayer
+import nltk
+from nltk.tokenize import WordPunctTokenizer
+import html
+
+nltk.download('punkt')
 
 # 超参数设置
 BATCH_SIZE = 32
@@ -18,14 +23,23 @@ NUM_LAYERS = 3
 FF_DIM = 512
 DROPOUT = 0.1
 EPOCHS = 10
-MAX_LEN = 64
+MAX_LEN = 256
 DEVICE = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+print(f'Using device: {DEVICE}')
 
-# 简单分词器,后面可以试试别的
+def clean_text(text):
+    url_pattern = re.compile(r'http\S+')
+    text = url_pattern.sub(r'', text)
+    text = html.unescape(text)
+    text = re.sub(r'\s+', ' ', text).strip()
+    text = text.lower()
+    return text
+
+# 使用NLTK的WordPunctTokenizer进行分词
 def tokenize(text):
-    return re.findall(r'\w+', text.lower())
+    return WordPunctTokenizer().tokenize(clean_text(text))
 
-# 我之前下载的预训练模型有别的vocab.txt我也想换着试试
+# 构建词汇表函数
 def build_vocab(texts, min_freq=2):
     counter = Counter()
     for text in texts:
@@ -39,6 +53,7 @@ def build_vocab(texts, min_freq=2):
             idx += 1
     return vocab
 
+# 编码函数
 def encode(text, vocab):
     tokens = tokenize(text)
     # 添加特殊标记：[CLS]开头，[SEP]结尾
@@ -52,6 +67,7 @@ def encode(text, vocab):
         ids = ids[:MAX_LEN]
     return ids
 
+# 位置编码类
 class PositionalEncoding(nn.Module):
     def __init__(self, d_model, dropout=0.1, max_len=5000):
         super().__init__()
@@ -69,6 +85,7 @@ class PositionalEncoding(nn.Module):
         x = x + self.pe[:x.size(1)].permute(1, 0, 2)
         return self.dropout(x)
 
+# 定义数据集类
 class RumorDataset(Dataset):
     def __init__(self, df, vocab):
         self.texts = df['text'].tolist()
@@ -85,6 +102,7 @@ class RumorDataset(Dataset):
         y = torch.tensor(self.labels[idx], dtype=torch.float)
         return x_text, x_event, y
 
+# 定义Transformer谣言检测模型
 class TransformerRumorDetector(nn.Module):
     def __init__(self, vocab_size, embedding_dim, num_heads, num_layers, ff_dim, num_events):
         super().__init__()
@@ -153,6 +171,7 @@ class TransformerRumorDetector(nn.Module):
         logits = self.classifier(combined)
         return logits.squeeze(1)
 
+# 定义评估函数
 def evaluate(model, loader):
     model.eval()
     correct, total = 0, 0
@@ -165,6 +184,7 @@ def evaluate(model, loader):
             total += y.size(0)
     return correct / total
 
+# 定义主函数
 def main():
     train_df = pd.read_csv('./data/train.csv')
     val_df = pd.read_csv('./data/val.csv')
@@ -194,7 +214,7 @@ def main():
     
     # 学习率调度器
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, mode='max', factor=0.5, patience=2, verbose=True
+        optimizer, mode='max', factor=0.5, patience=2
     )
     
     # 训练模型
