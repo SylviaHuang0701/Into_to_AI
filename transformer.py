@@ -123,12 +123,29 @@ class TransformerRumorDetector(nn.Module):
         
         # 事件嵌入层
         self.event_embedding = nn.Embedding(num_events, EVENT_EMBED_DIM)
+        self.event_pos_encoder = PositionalEncoding(EVENT_EMBED_DIM, DROPOUT, 1)  # 事件嵌入只有一个位置
+        
+        # 事件与文本特征交互的Transformer编码器
+        combined_d_model = embedding_dim + EVENT_EMBED_DIM
+        combined_encoder_layer = TransformerEncoderLayer(
+            d_model=combined_d_model,
+            nhead=num_heads,
+            dim_feedforward=ff_dim,
+            dropout=DROPOUT,
+            batch_first=True
+        )
+        self.combined_transformer_encoder = TransformerEncoder(combined_encoder_layer, num_layers=num_layers)
         
         # 分类头
         self.classifier = nn.Sequential(
-            nn.Linear(embedding_dim + EVENT_EMBED_DIM, 128),
-            nn.ReLU(),
-            nn.Dropout(DROPOUT),
+            nn.Linear(combined_d_model, 256),
+            nn.BatchNorm1d(256),
+            nn.GELU(),
+            nn.Dropout(0.3),
+            nn.Linear(256, 128),
+            nn.BatchNorm1d(128),
+            nn.GELU(),
+            nn.Dropout(0.2),
             nn.Linear(128, 1)
         )
         
@@ -145,30 +162,44 @@ class TransformerRumorDetector(nn.Module):
                     layer.bias.data.zero_()
 
     def forward(self, text_input, event_input):
-        # 创建注意力掩码（忽略填充位置）
-        pad_mask = (text_input == 0)  # 假设0是填充索引
+        # 创建文本注意力掩码（忽略填充位置）
+        text_pad_mask = (text_input == 0)  # 假设0是填充索引
         
         # 文本嵌入 + 位置编码
-        emb = self.embedding(text_input) * math.sqrt(EMBEDDING_DIM)
-        emb = self.pos_encoder(emb)
+        text_emb = self.embedding(text_input) * math.sqrt(EMBEDDING_DIM)
+        text_emb = self.pos_encoder(text_emb)
         
-        # Transformer编码
-        transformer_out = self.transformer_encoder(
-            emb, 
-            src_key_padding_mask=pad_mask
+        # 文本Transformer编码
+        text_transformer_out = self.transformer_encoder(
+            text_emb, 
+            src_key_padding_mask=text_pad_mask
         )
         
-        # 获取[CLS]标记的输出（位置0）作为整体表示
-        cls_output = transformer_out[:, 0, :]
+        # 获取文本的[CLS]标记输出（位置0）作为整体表示
+        text_cls_output = text_transformer_out[:, 0, :]
         
-        # 事件嵌入
+        # 事件嵌入 + 位置编码
         event_features = self.event_embedding(event_input)
+        event_features = event_features.unsqueeze(1)  # 添加序列维度
+        event_features = self.event_pos_encoder(event_features)
         
-        # 拼接文本和事件特征
-        combined = torch.cat((cls_output, event_features), dim=1)
+        # 将事件嵌入与文本特征拼接
+        combined_features = torch.cat((text_transformer_out, event_features.expand(-1, text_transformer_out.shape[1], -1)), dim=2)
+        
+        # 修正：使用文本的原始2D填充掩码作为组合特征的掩码
+        combined_pad_mask = text_pad_mask  # 直接使用2D掩码
+        
+        # 组合特征Transformer编码
+        combined_transformer_out = self.combined_transformer_encoder(
+            combined_features,
+            src_key_padding_mask=combined_pad_mask
+        )
+        
+        # 获取组合特征的[CLS]标记输出（位置0）作为整体表示
+        combined_cls_output = combined_transformer_out[:, 0, :]
         
         # 分类
-        logits = self.classifier(combined)
+        logits = self.classifier(combined_cls_output)
         return logits.squeeze(1)
 
 # 定义评估函数
