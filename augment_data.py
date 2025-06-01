@@ -10,73 +10,49 @@ MAX_LEN = 512
 train_df = pd.read_csv('./data/train.csv')
 val_df = pd.read_csv('./data/val.csv')
 
-import random
-from collections import defaultdict
+# 加载 T5 模型和分词器
+device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+model_name = 't5-small'
+t5_model = T5ForConditionalGeneration.from_pretrained(model_name)
+t5_tokenizer = T5Tokenizer.from_pretrained(model_name)
+t5_model = t5_model.to(device)
 
-# 构建一个简单的同义词词典
-synonyms = {
-    'good': ['great', 'fine', 'excellent'],
-    'bad': ['terrible', 'poor', 'awful'],
-    'happy': ['joyful', 'content', 'pleased'],
-    # 添加更多同义词
-}
+# 初始化增强器
+synonym_aug = naw.SynonymAug(aug_src='wordnet')
+random_insert_aug = naw.ContextualWordEmbsAug(model_path='bert-base-uncased', action="insert", aug_max=1)
+random_delete_aug = naw.RandomWordAug(action="delete", aug_min=1, aug_max=1)
 
-def synonym_replacement(text, n=1):
-    words = text.split()
-    augmented_words = words.copy()
-    for _ in range(n):
-        if len(words) > 0:
-            idx = random.randint(0, len(words) - 1)
-            word = words[idx]
-            if word in synonyms:
-                augmented_words[idx] = random.choice(synonyms[word])
-    return ' '.join(augmented_words)
+# 数据增强函数
+def augment_data(text, methods=['random_insert']):
+    augmented_texts = [text]  # 保留原始文本
 
-def random_insertion(text, n=1):
-    words = text.split()
-    for _ in range(n):
-        if len(words) > 0:
-            idx = random.randint(0, len(words) - 1)
-            word = words[idx]
-            # 简单起见，这里直接插入原词，实际应用中可以插入相关词
-            words.insert(idx, word)
-    return ' '.join(words)
-
-def random_deletion(text, p=0.1):
-    words = text.split()
-    if len(words) == 0:
-        return text
-    augmented_words = []
-    for word in words:
-        if random.random() > p:
-            augmented_words.append(word)
-    if len(augmented_words) == 0:
-        return random.choice(words)
-    return ' '.join(augmented_words)
-
-def random_swap(text, n=1):
-    words = text.split()
-    for _ in range(n):
-        if len(words) >= 2:
-            idx1, idx2 = random.sample(range(len(words)), 2)
-            words[idx1], words[idx2] = words[idx2], words[idx1]
-    return ' '.join(words)
-
-def augment_data(text):
-    augmented_texts = [text]
-    
     # 同义词替换
-    augmented_texts.append(synonym_replacement(text))
-    
+    if 'synonym' in methods:
+        augmented_text = synonym_aug.augment(text)
+        augmented_texts.append(augmented_text)
+
     # 随机插入
-    augmented_texts.append(random_insertion(text))
-    
+    if 'random_insert' in methods and random.random() < 0.5:
+        augmented_text = random_insert_aug.augment(text)
+        augmented_texts.append(augmented_text)
+
     # 随机删除
-    augmented_texts.append(random_deletion(text))
-    
-    # 随机交换
-    augmented_texts.append(random_swap(text))
-    
+    if 'random_delete' in methods:
+        augmented_text = random_delete_aug.augment(text)
+        augmented_texts.append(augmented_text)
+
+    # 使用 T5 模型改写文本
+    if 't5' in methods and random.random() < 0.5: 
+        try:
+            inputs = t5_tokenizer.encode("paraphrase: " + text, return_tensors="pt", max_length=MAX_LEN, truncation=True)
+            inputs = inputs.to(device)
+            outputs = t5_model.generate(inputs, max_length=MAX_LEN, num_return_sequences=1)
+            augmented_text = t5_tokenizer.decode(outputs[0], skip_special_tokens=True)
+            augmented_texts.append(augmented_text)
+        except Exception as e:
+            print(f"Error during T5 augmentation: {e}")
+            augmented_texts.append(text)  # 如果出错，保留原始文本
+
     return augmented_texts
 
 # 应用数据增强
@@ -87,8 +63,13 @@ for _, row in val_df.iterrows():
     label = row['label']
     event = row['event']
 
+    if not isinstance(text, str) or pd.isnull(text):
+        text = ""
+
+    # 获取增强后的文本列表
     augmented_texts = augment_data(text)
 
+    # 为每个增强后的文本创建新的数据行
     for aug_text in augmented_texts:
         all_augmented_data.append({
             'id': id_val,
@@ -96,6 +77,9 @@ for _, row in val_df.iterrows():
             'label': label,
             'event': event
         })
+        
 
 augmented_df = pd.DataFrame(all_augmented_data)
-augmented_df.to_csv('./data/val_augmented_data.csv', index=False)
+
+# 保存增强后的数据
+augmented_df.to_csv('./data/val_augmented_data_2.csv', index=False)

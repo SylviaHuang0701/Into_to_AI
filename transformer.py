@@ -189,6 +189,13 @@ def main():
     train_df = pd.read_csv('./data/train.csv')
     val_df = pd.read_csv('./data/val.csv')
 
+    train_df['text'] = train_df['text'].fillna('')
+    val_df['text'] = val_df['text'].fillna('')
+    
+    # 确保所有文本都是字符串类型
+    train_df['text'] = train_df['text'].astype(str)
+    val_df['text'] = val_df['text'].astype(str)
+
     vocab = build_vocab(train_df['text'])
     
     num_events = max(train_df['event'].max(), val_df['event'].max()) + 1
