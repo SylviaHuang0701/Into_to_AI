@@ -61,3 +61,13 @@
    如果希望自己修改训练参数/训练数据，请修改`train.py`后重新运行`train.py`存储最新模型，再运行`classify.py`进行效果测试。
    
    `classify.py`中测试了单条`text`和`csv`文件，可以自行修改想要测试的内容，如果能找到多元数据集并用于测试训练就更好了
+
+## 数据集扩展相关
+1. data文件夹下新增了在twitter15、twitter16两个新文件夹，是找到的新数据，只含有id、text和正确性标签。新数据中的标签除true、false外，还有non-rumor和unverified两种，不能完全利用
+2. augment_twitter_data.py把新增的twitter数据中所有.train,.test,.dev文件中标签为true、false的条目添加到train_new.csv中，event栏默认填0。如果找到其他相同格式的数据集，也可以用此程序添加
+3. 现在的train_new.csv中包括原train.csv的所有数据和twitter数据扩展，共3900条
+4. testing.csv中式来源于twitter数据扩展的最后126条，不包含在train_new.csv中，可用作测试
+5. 删除ai_generate.csv，准确性不可靠
+
+## 去除event依赖
+- 现在无集成学习/train.py中以去除对event的使用，测试时需通过classify_noevent.py

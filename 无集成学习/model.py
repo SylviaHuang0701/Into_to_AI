@@ -19,7 +19,7 @@ class PositionalEncoding(nn.Module):
         return self.dropout(x)
 
 class TransformerRumorDetector(nn.Module):
-    def __init__(self, vocab_size, embedding_dim, num_heads, num_layers, ff_dim, num_events):
+    def __init__(self, vocab_size, embedding_dim, num_heads, num_layers, ff_dim):
         super().__init__()
         self.embedding = nn.Embedding(vocab_size, embedding_dim, padding_idx=0)
         self.pos_encoder = PositionalEncoding(embedding_dim, 0.1, 256)
@@ -31,19 +31,8 @@ class TransformerRumorDetector(nn.Module):
             batch_first=True
         )
         self.transformer_encoder = TransformerEncoder(encoder_layer, num_layers=num_layers)
-        self.event_embedding = nn.Embedding(num_events, 32)
-        self.event_pos_encoder = PositionalEncoding(32, 0.1, 1)
-        combined_d_model = embedding_dim + 32
-        combined_encoder_layer = TransformerEncoderLayer(
-            d_model=combined_d_model,
-            nhead=num_heads,
-            dim_feedforward=ff_dim,
-            dropout=0.1,
-            batch_first=True
-        )
-        self.combined_transformer_encoder = TransformerEncoder(combined_encoder_layer, num_layers=num_layers)
         self.classifier = nn.Sequential(
-            nn.Linear(combined_d_model, 256),
+            nn.Linear(embedding_dim, 256),
             nn.BatchNorm1d(256),
             nn.GELU(),
             nn.Dropout(0.3),
@@ -64,13 +53,11 @@ class TransformerRumorDetector(nn.Module):
                 if layer.bias is not None:
                     layer.bias.data.zero_()
 
-    def forward(self, text_input, event_input):
+    def forward(self, text_input):
         pad_mask = (text_input == 0)
         emb = self.embedding(text_input) * torch.sqrt(torch.tensor(128.0))
         emb = self.pos_encoder(emb)
         transformer_out = self.transformer_encoder(emb, src_key_padding_mask=pad_mask)
         cls_output = transformer_out[:, 0, :]
-        event_features = self.event_embedding(event_input)
-        combined = torch.cat((cls_output, event_features), dim=1)
-        logits = self.classifier(combined)
+        logits = self.classifier(cls_output)
         return logits.squeeze(1)
