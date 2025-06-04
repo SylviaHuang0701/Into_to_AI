@@ -71,3 +71,22 @@
 
 ## 去除event依赖
 - 现在无集成学习/train.py中以去除对event的使用，测试时需通过classify_noevent.py
+
+
+## 实验结果总结：
+1. 没有加入新数据集：
+   
+   - 在集成学习和非集成学习中均测试了是否加入event进行训练，不加入event时val acc轻微下降，testing因为无event，测试时也不能输入event
+   - 集成学习：
+     - 加入event训练，集成模型val acc为87.65，最佳单一模型val acc为86.17，test acc：64.00
+
+         此处因为模型参数需要一致，测试时默认了所有event均为0，实际上不应该这么做  
+     - 不加入event训练，集成模型val acc为87.16，最佳单一模型val acc为86.67，test acc：66.40
+   - 非集成学习：
+     - 加入event训练，val acc:不记得了
+     - 不加入event训练，val acc:85.19,test acc：72.00%
+2. 加入新数据集：不能加入event进行训练，，因为新数据集无event选择全部用0填充
+   - 非集成学习：
+     - val acc:84.69, test acc:87.20
+   - 集成学习：
+     - 集成模型val acc:88.40，单一模型val acc:86.67%, test acc:91.20

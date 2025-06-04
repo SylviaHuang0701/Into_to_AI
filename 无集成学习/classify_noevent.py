@@ -8,6 +8,7 @@ from nltk.tokenize import WordPunctTokenizer
 import html
 import re
 import json
+from train import clean_text, tokenize
 
 nltk.download('punkt')
 
@@ -20,21 +21,9 @@ DROPOUT = 0.1
 MAX_LEN = 128
 DEVICE = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 
-def clean_text(text):
-    text = re.sub(r'@\w+', '@USER', text)
-    text = re.sub(r'#(\w+)', r'HASHTAG\1', text)
-    text = re.sub(r'(.)\1{2,}', r'\1\1', text)
-    text = html.unescape(text)
-    text = re.sub(r'http\S+', 'URL', text)
-    return text.lower().strip()
-
-def tokenize(text):
-    return WordPunctTokenizer().tokenize(clean_text(text))
-
 class RumourDetectClass:
-    def __init__(self, model_path='transformer_rumor_detector2.pt', data_path='./data/train_new.csv', vocab_path='vocab.json'):
+    def __init__(self, model_path='transformer_rumor_detector2.pt', vocab_path='vocab.json'):
         checkpoint = torch.load(model_path, map_location=DEVICE)
-        train_df = pd.read_csv(data_path)
         with open(vocab_path, 'r') as f:
             self.vocab = json.load(f)
         self.model = model.TransformerRumorDetector(
@@ -66,24 +55,16 @@ class RumourDetectClass:
         return 1 if prob.item() > 0.5 else 0
     
     def test_csv(self, csv_path):
-        # 读取CSV文件
         test_df = pd.read_csv(csv_path)
-
         test_correct = 0
-        for i, row in test_df.iterrows():
+        for _, row in test_df.iterrows():
             result = self.classify(row['text'])
-            if (result == row['label']):
+            if result == row['label']:
                 test_correct += 1
-
         print(f"测试集准确率: {test_correct / len(test_df):.2%}")
 
-# 使用示例
 if __name__ == "__main__":
     detector = RumourDetectClass()
-    
-    # 测试单条文本
     result = detector.classify("Breaking: Earthquake hits California, magnitude 7.5!")
     print(result)
-    
-    # 测试CSV文件
-    detector.test_csv(csv_path='./data/ai_generate.csv')
+    detector.test_csv(csv_path='../data/testing.csv')

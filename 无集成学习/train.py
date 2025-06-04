@@ -94,8 +94,8 @@ def warmup_lr_scheduler(optimizer, warmup_iters, warmup_factor):
 
 def main():
     torch.manual_seed(2025)
-    train_df = pd.read_csv('./data/train.csv')
-    val_df = pd.read_csv('./data/val.csv')
+    train_df = pd.read_csv('../data/train_new.csv')
+    val_df = pd.read_csv('../data/val.csv')
     train_df['text'] = train_df['text'].fillna('')
     val_df['text'] = val_df['text'].fillna('')
     vocab = build_vocab(train_df['text'])

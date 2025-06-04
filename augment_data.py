@@ -1,63 +1,61 @@
-import pandas as pd
-import nlpaug.augmenter.word as naw
-from transformers import pipeline, T5ForConditionalGeneration, T5Tokenizer
+import nltk
+from nltk.corpus import wordnet
 import random
-import torch
+from nltk.tokenize import word_tokenize
+from nltk.tokenize import sent_tokenize
+import pandas as pd
+nltk.download('punkt')
+nltk.download('wordnet')
+nltk.download('punkt_tab')
 
-MAX_LEN = 512
+def get_synonyms(word):
+    """
+    获取一个单词的同义词列表
+    """
+    synonyms = []
+    for syn in wordnet.synsets(word):
+        for lemma in syn.lemmas():
+            synonyms.append(lemma.name())
+    return list(set(synonyms))
 
-# 读取数据
-train_df = pd.read_csv('./data/train.csv')
-val_df = pd.read_csv('./data/val.csv')
+def synonym_replacement(text, n_replacements):
+    """
+    对文本进行同义词替换增强
+    """
+    words = word_tokenize(text)
+    augmented_words = words.copy()
+    unique_words = list(set(words))
+    n_replaced = 0
+    for word in unique_words:
+        if n_replaced >= n_replacements:
+            break
+        synonyms = get_synonyms(word)
+        if len(synonyms) > 0 and word != "":
+            random_synonym = random.choice(synonyms)
+            augmented_words = [random_synonym if w == word else w for w in augmented_words]
+            n_replaced += 1
+    augmented_text = ' '.join(augmented_words)
+    return augmented_text
 
-# 加载 T5 模型和分词器
-device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
-model_name = 't5-small'
-t5_model = T5ForConditionalGeneration.from_pretrained(model_name)
-t5_tokenizer = T5Tokenizer.from_pretrained(model_name)
-t5_model = t5_model.to(device)
+import random
 
-# 初始化增强器
-synonym_aug = naw.SynonymAug(aug_src='wordnet')
-random_insert_aug = naw.ContextualWordEmbsAug(model_path='bert-base-uncased', action="insert", aug_max=1)
-random_delete_aug = naw.RandomWordAug(action="delete", aug_min=1, aug_max=1)
+def sentence_restructuring(text):
+    """
+    对文本进行句子重组增强
+    """
+    sentences = sent_tokenize(text)
+    if len(sentences) < 2:
+        return text
+    # 随机交换两个相邻的句子
+    i = random.randint(0, len(sentences)-2)
+    sentences[i], sentences[i+1] = sentences[i+1], sentences[i]
+    augmented_text = ' '.join(sentences)
+    return augmented_text
 
-# 数据增强函数
-def augment_data(text, methods=['random_insert']):
-    augmented_texts = [text]  # 保留原始文本
-
-    # 同义词替换
-    if 'synonym' in methods:
-        augmented_text = synonym_aug.augment(text)
-        augmented_texts.append(augmented_text)
-
-    # 随机插入
-    if 'random_insert' in methods and random.random() < 0.5:
-        augmented_text = random_insert_aug.augment(text)
-        augmented_texts.append(augmented_text)
-
-    # 随机删除
-    if 'random_delete' in methods:
-        augmented_text = random_delete_aug.augment(text)
-        augmented_texts.append(augmented_text)
-
-    # 使用 T5 模型改写文本
-    if 't5' in methods and random.random() < 0.5: 
-        try:
-            inputs = t5_tokenizer.encode("paraphrase: " + text, return_tensors="pt", max_length=MAX_LEN, truncation=True)
-            inputs = inputs.to(device)
-            outputs = t5_model.generate(inputs, max_length=MAX_LEN, num_return_sequences=1)
-            augmented_text = t5_tokenizer.decode(outputs[0], skip_special_tokens=True)
-            augmented_texts.append(augmented_text)
-        except Exception as e:
-            print(f"Error during T5 augmentation: {e}")
-            augmented_texts.append(text)  # 如果出错，保留原始文本
-
-    return augmented_texts
-
+df = pd.read_csv('./data/train.csv')
 # 应用数据增强
 all_augmented_data = []
-for _, row in val_df.iterrows():
+for _, row in df.iterrows():
     id_val = row['id']
     text = row['text']
     label = row['label']
@@ -66,20 +64,26 @@ for _, row in val_df.iterrows():
     if not isinstance(text, str) or pd.isnull(text):
         text = ""
 
-    # 获取增强后的文本列表
-    augmented_texts = augment_data(text)
+    # 先保留原始文本
+    all_augmented_data.append({
+        'id': id_val,
+        'text': text,
+        'label': label,
+        'event': event
+    })
 
-    # 为每个增强后的文本创建新的数据行
-    for aug_text in augmented_texts:
-        all_augmented_data.append({
-            'id': id_val,
-            'text': aug_text,
-            'label': label,
-            'event': event
-        })
-        
+    # 获取增强后的文本
+    augmented_text = synonym_replacement(text, 2)
+
+    # 创建新的数据行以保存增强后的文本
+    all_augmented_data.append({
+        'id': id_val,
+        'text': augmented_text,
+        'label': label,
+        'event': event
+    })
 
 augmented_df = pd.DataFrame(all_augmented_data)
 
 # 保存增强后的数据
-augmented_df.to_csv('./data/val_augmented_data_2.csv', index=False)
+augmented_df.to_csv('./data/train_augmented_data_simple.csv', index=False)
