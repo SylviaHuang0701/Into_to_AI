@@ -225,9 +225,10 @@ def main():
     with open('vocab.json', 'w') as f:
         json.dump(vocab, f)
 
-    num_events = (max(train_df['event'].max(), val_df['event'].max()) + 1
-                 if 'event' in train_df.columns and 'event' in val_df.columns
-                 else 1)
+    if 'event' in train_df.columns and 'event' in val_df.columns:
+        num_events = int(max(train_df['event'].max(), val_df['event'].max())) + 1
+    else:
+        num_events = 1
     print(f"事件数量: {num_events}")
 
     if args.use_event:
