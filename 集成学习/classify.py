@@ -2,13 +2,11 @@ import torch
 import pandas as pd
 import model
 import nltk
-from nltk.tokenize import WordPunctTokenizer
-import html
-import re
 import os
 import json
 import argparse
 from train import clean_text, tokenize
+from visualization import plot_confusion_matrix, plot_roc_curve, plot_precision_recall_curve
 
 try:
     nltk.data.find('tokenizers/punkt')
@@ -22,15 +20,13 @@ NUM_LAYERS = 4
 FF_DIM = 256
 DROPOUT = 0.2
 MAX_LEN = 64
-NUM_EVENTS = 7
 DEVICE = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 
 
 class RumourDetectClass:
     def __init__(self, model_paths=None, vocab_path='vocab.json', use_event=True):
-        """初始化谣言检测器"""
         if model_paths is None:
-            # 默认使用modified模型
+            # 默认使用加入新数据的训练集训出的模型
             model_paths = [
                 'transformer_rumor_detector_withevent_1.pt',
                 'transformer_rumor_detector_withevent_2.pt',
@@ -45,15 +41,22 @@ class RumourDetectClass:
         self.use_event = use_event
         print(f"使用{'带' if use_event else '不带'}事件信息的模型")
         
-        # 加载词表
         try:
             with open(vocab_path, 'r', encoding='utf-8') as f:
                 self.vocab = json.load(f)
             print(f"成功加载词表，大小: {len(self.vocab)}")
         except Exception as e:
             raise RuntimeError(f"加载词表失败: {e}")
+        
+        try:
+            with open('num_events.json', 'r') as f:
+                num_events_data = json.load(f)
+                self.num_events = num_events_data.get('num_events', 1)
+            print(f"成功加载 num_events: {self.num_events}")
+        except Exception as e:
+            print(f"加载 num_events 失败: {e}")
+            self.num_events = 7
 
-        # 加载模型
         self.models = []
         for path in self.model_paths:
             if os.path.exists(path):
@@ -64,7 +67,7 @@ class RumourDetectClass:
                         num_heads=NUM_HEADS,
                         num_layers=NUM_LAYERS,
                         ff_dim=FF_DIM,
-                        num_events=NUM_EVENTS,
+                        num_events=self.num_events,
                         use_event=self.use_event
                     ).to(DEVICE)
                     
@@ -82,7 +85,6 @@ class RumourDetectClass:
             raise RuntimeError("没有成功加载任何模型")
 
     def preprocess(self, text):
-        """预处理文本"""
         text = clean_text(text)
         tokens = tokenize(text)
         tokens = ['<CLS>'] + tokens + ['<SEP>']
@@ -93,14 +95,16 @@ class RumourDetectClass:
             ids = ids[:MAX_LEN]
         return torch.tensor(ids, dtype=torch.long).unsqueeze(0).to(DEVICE)
 
-    def classify(self, text: str, event_id=None) -> int:
+    def classify(self, text: str, event_id=None) -> tuple:
         """
         对输入的文本进行谣言检测
         Args:
             text: 输入的文本字符串
-            event_id: 事件ID（可选）
+            event_id: 事件ID，默认模型不使用event信息训练，因此调用时不可加入event
         Returns:
             int: 预测的类别（0表示非谣言，1表示谣言）
+        
+        为绘制混淆矩阵和ROC曲线，原来classify返回的是tuple(类别，概率），但现在只返回类别
         """
         text_ids = self.preprocess(text)
         
@@ -119,10 +123,6 @@ class RumourDetectClass:
                     logits = transformer_model(text_ids)
                 logits_list.append(logits)
             
-            # 确保有预测结果
-            if not logits_list:
-                raise RuntimeError("没有有效的预测结果")
-            
             avg_logits = torch.mean(torch.stack(logits_list), dim=0)
             prob = torch.sigmoid(avg_logits)
             return 1 if prob.item() > 0.5 else 0
@@ -136,19 +136,27 @@ class RumourDetectClass:
             
             print(f"开始测试 {total} 个样本")
             
+            y_true = []
+            y_pred = []
+            y_prob = []
+            
             for i, row in test_df.iterrows():
                 if i % 100 == 0:
                     print(f"已处理: {i}/{total}")
-                
-                # 如果数据集中有事件信息且模型使用事件信息，则使用数据集中的事件ID
                 event_id = row['event'] if 'event' in test_df.columns and self.use_event else None
                 result = self.classify(row['text'], event_id)
+
+                y_true.append(row['label'])
+                y_pred.append(result)
                 
                 if result == row['label']:
                     correct += 1
             
             accuracy = correct / total
             print(f"测试完成，准确率: {accuracy:.2%}")
+            
+            plot_confusion_matrix(y_true, y_pred)
+            
             return accuracy
             
         except Exception as e:
@@ -156,23 +164,20 @@ class RumourDetectClass:
             return 0.0
 
 def parse_args():
-    """解析命令行参数"""
     parser = argparse.ArgumentParser(description='谣言检测模型测试程序')
-    parser.add_argument('--use-event', type=int, choices=[0, 1], default=0,
-                      help='是否使用事件信息 (0: 不使用, 1: 使用)')
-    parser.add_argument('--test-file', type=str, default='../data/testing.csv',
-                      help='测试数据文件路径')
+    parser.add_argument('--use-event',action='store_true',help='是否使用事件信息')
+    parser.add_argument('--test-file', type=str, default='../data/testing.csv',help='测试数据文件路径')
     return parser.parse_args()
 
-# 使用示例
 if __name__ == "__main__":
-    # 解析命令行参数
     args = parse_args()
-    
-    # 初始化检测器
+
     detector = RumourDetectClass(
         use_event=bool(args.use_event)
     )
     
-    # 测试数据集
-    detector.test_csv(args.test_file)
+    accuracy = detector.test_csv(args.test_file)
+    
+    text = "#rcmp to hold news conference on #ottawa shootings at 2 pm et, 11 am pt. watch live coverage @ URL"
+    result = detector.classify(text)
+    print(result)

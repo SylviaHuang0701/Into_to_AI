@@ -13,6 +13,7 @@ import nltk
 from nltk.tokenize import WordPunctTokenizer
 import json
 import argparse
+from visualization import plot_training_metrics
 
 try:
     nltk.data.find('tokenizers/punkt')
@@ -142,7 +143,6 @@ def warmup_lr_scheduler(optimizer, warmup_iters, warmup_factor):
     return torch.optim.lr_scheduler.LambdaLR(optimizer, f)
 
 def train_model(transformer_model, optimizer, train_loader, val_loader, model_idx):
-    """训练单个模型"""
     criterion = nn.BCEWithLogitsLoss()
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, mode='max', factor=0.5, patience=2
@@ -153,8 +153,11 @@ def train_model(transformer_model, optimizer, train_loader, val_loader, model_id
     best_val_acc = 0.0
     model_path = f'transformer_rumor_detector_{model_idx}.pt'
     
+    epochs_list = []
+    train_losses = []
+    val_accuracies = []
+    
     for epoch in range(EPOCHS):
-        # 训练阶段
         transformer_model.train()
         total_loss = 0
         total_samples = 0
@@ -177,16 +180,18 @@ def train_model(transformer_model, optimizer, train_loader, val_loader, model_id
                 
             total_loss += loss.item() * y.size(0)
             total_samples += y.size(0)
-        
-        # 验证阶段
+
         val_acc = evaluate_single(transformer_model, val_loader)
         avg_loss = total_loss / total_samples
         scheduler.step(val_acc)
         
+        epochs_list.append(epoch + 1)
+        train_losses.append(avg_loss)
+        val_accuracies.append(val_acc)
+        
         print(f'Model {model_idx} - Epoch {epoch+1}/{EPOCHS}, '
               f'Loss: {avg_loss:.4f}, Val Acc: {val_acc:.4f}')
         
-        # 保存最佳模型
         if val_acc > best_val_acc:
             best_val_acc = val_acc
             torch.save({
@@ -196,69 +201,55 @@ def train_model(transformer_model, optimizer, train_loader, val_loader, model_id
                 'val_acc': val_acc,
             }, model_path)
             print(f'Model {model_idx} - 保存新的最佳模型，验证准确率: {val_acc:.4f}')
+    
+    plot_training_metrics(epochs_list, train_losses, val_accuracies, model_idx)
             
     return model_path, best_val_acc
 
 def main():
-    """主函数"""
-    # 解析命令行参数
     parser = argparse.ArgumentParser(description="训练Transformer谣言检测器")
     parser.add_argument('--use-event', action='store_true', help='是否使用事件信息')
     args = parser.parse_args()
-
     print(f"使用设备: {DEVICE}")
 
-    # 检查数据文件
-    if not os.path.exists(TRAIN_PATH):
-        raise FileNotFoundError(f"训练集文件不存在: {TRAIN_PATH}")
-    if not os.path.exists(VAL_PATH):
-        raise FileNotFoundError(f"验证集文件不存在: {VAL_PATH}")
-
-    # 加载数据
     train_df = pd.read_csv(TRAIN_PATH)
     val_df = pd.read_csv(VAL_PATH)
     print(f"训练集大小: {len(train_df)}, 验证集大小: {len(val_df)}")
 
-    # 打印数据集统计信息
     if 'label' in train_df.columns:
         print(f"训练集正负样本比例: {train_df['label'].mean():.4f}")
     if 'label' in val_df.columns:
         print(f"验证集正负样本比例: {val_df['label'].mean():.4f}")
 
-    # 构建词表
     vocab = build_vocab(train_df['text'])
     with open('vocab.json', 'w') as f:
         json.dump(vocab, f)
-    print(f"词汇表大小: {len(vocab)}")
 
-    # 获取事件数量
     num_events = (max(train_df['event'].max(), val_df['event'].max()) + 1
                  if 'event' in train_df.columns and 'event' in val_df.columns
                  else 1)
     print(f"事件数量: {num_events}")
 
-    # 准备数据集
+    if args.use_event:
+        with open('num_events.json', 'w') as f:
+            json.dump({'num_events': num_events}, f)
+
     train_set = RumorDataset(train_df, vocab)
     val_set = RumorDataset(val_df, vocab)
     train_loader = DataLoader(train_set, batch_size=BATCH_SIZE, shuffle=True)
     val_loader = DataLoader(val_set, batch_size=BATCH_SIZE)
 
-    # 训练多个模型
     model_paths = []
     best_val_accs = []
     print(f"\n开始训练 {NUM_MODELS} 个模型进行集成学习...")
 
     for i in range(NUM_MODELS):
         print(f"\n===== 训练模型 {i+1}/{NUM_MODELS} =====")
-        
-        # 设置随机种子
         seed = MODEL_SEEDS[i] if i < len(MODEL_SEEDS) else MODEL_SEEDS[0] + i
         torch.manual_seed(seed)
         np.random.seed(seed)
         if torch.cuda.is_available():
             torch.cuda.manual_seed_all(seed)
-
-        # 初始化模型
         transformer_model = model.TransformerRumorDetector(
             len(vocab),
             EMBEDDING_DIM,
@@ -268,15 +259,11 @@ def main():
             num_events=num_events,
             use_event=args.use_event
         ).to(DEVICE)
-
-        # 打印模型参数信息
         total_params = sum(p.numel() for p in transformer_model.parameters())
         trainable_params = sum(p.numel() for p in transformer_model.parameters()
                              if p.requires_grad)
         print(f"模型 {i+1} 总参数: {total_params:,}, "
               f"可训练参数: {trainable_params:,}")
-
-        # 训练模型
         optimizer = optim.AdamW(
             transformer_model.parameters(),
             lr=LEARNING_RATE,
@@ -289,13 +276,11 @@ def main():
         best_val_accs.append(best_val_acc)
         print(f"模型 {i+1} 训练完成，最佳验证准确率: {best_val_acc:.4f}")
 
-    # 打印各模型性能
     print("\n各模型独立性能:")
     for i, acc in enumerate(best_val_accs):
         print(f"模型 {i+1}: 验证准确率 = {acc:.4f}")
     print(f"平均验证准确率: {np.mean(best_val_accs):.4f}")
 
-    # 评估集成模型
     ensemble_models = []
     for path in model_paths:
         if os.path.exists(path):
