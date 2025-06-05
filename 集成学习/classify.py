@@ -138,7 +138,6 @@ class RumourDetectClass:
             
             y_true = []
             y_pred = []
-            y_prob = []
             
             for i, row in test_df.iterrows():
                 if i % 100 == 0:
