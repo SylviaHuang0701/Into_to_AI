@@ -114,18 +114,18 @@ class RumourDetectClass:
             print("警告：模型需要事件信息但未提供，使用默认值0")
         
         with torch.no_grad():
-            logits_list = []
+            probs_list = []
             for transformer_model in self.models:
                 if self.use_event:
                     event_tensor = torch.tensor([event_id], dtype=torch.long).to(DEVICE)
                     logits = transformer_model(text_ids, event_tensor)
                 else:
                     logits = transformer_model(text_ids)
-                logits_list.append(logits)
+                prob = torch.sigmoid(logits)
+                probs_list.append(prob)
             
-            avg_logits = torch.mean(torch.stack(logits_list), dim=0)
-            prob = torch.sigmoid(avg_logits)
-            return 1 if prob.item() > 0.5 else 0
+            avg_prob = torch.mean(torch.stack(probs_list), dim=0)
+            return 1 if avg_prob.item() > 0.5 else 0
 
     def test_csv(self, csv_path):
         """测试CSV文件中的样本"""
@@ -166,7 +166,7 @@ class RumourDetectClass:
 def parse_args():
     parser = argparse.ArgumentParser(description='谣言检测模型测试程序')
     parser.add_argument('--use-event',action='store_true',help='是否使用事件信息')
-    parser.add_argument('--test-file', type=str, default='../data/testing.csv',help='测试数据文件路径')
+    parser.add_argument('--test-file', type=str, default='../data/val.csv',help='测试数据文件路径')
     return parser.parse_args()
 
 if __name__ == "__main__":
