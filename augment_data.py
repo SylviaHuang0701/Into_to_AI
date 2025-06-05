@@ -1,61 +1,59 @@
-import nltk
-from nltk.corpus import wordnet
-import random
-from nltk.tokenize import word_tokenize
-from nltk.tokenize import sent_tokenize
 import pandas as pd
-nltk.download('punkt')
-nltk.download('wordnet')
-nltk.download('punkt_tab')
+import nlpaug.augmenter.word as naw
+from transformers import BartForConditionalGeneration, BartTokenizer
+import torch
+import re
+import html
 
-def get_synonyms(word):
-    """
-    获取一个单词的同义词列表
-    """
-    synonyms = []
-    for syn in wordnet.synsets(word):
-        for lemma in syn.lemmas():
-            synonyms.append(lemma.name())
-    return list(set(synonyms))
+MAX_LEN = 512
 
-def synonym_replacement(text, n_replacements):
-    """
-    对文本进行同义词替换增强
-    """
-    words = word_tokenize(text)
-    augmented_words = words.copy()
-    unique_words = list(set(words))
-    n_replaced = 0
-    for word in unique_words:
-        if n_replaced >= n_replacements:
-            break
-        synonyms = get_synonyms(word)
-        if len(synonyms) > 0 and word != "":
-            random_synonym = random.choice(synonyms)
-            augmented_words = [random_synonym if w == word else w for w in augmented_words]
-            n_replaced += 1
-    augmented_text = ' '.join(augmented_words)
-    return augmented_text
+train_df = pd.read_csv('./data/train.csv')
+val_df = pd.read_csv('./data/val.csv')
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-import random
+bart_model = BartForConditionalGeneration.from_pretrained('facebook/bart-large-cnn').to(device)
+bart_tokenizer = BartTokenizer.from_pretrained('facebook/bart-large-cnn')
 
-def sentence_restructuring(text):
-    """
-    对文本进行句子重组增强
-    """
-    sentences = sent_tokenize(text)
-    if len(sentences) < 2:
-        return text
-    # 随机交换两个相邻的句子
-    i = random.randint(0, len(sentences)-2)
-    sentences[i], sentences[i+1] = sentences[i+1], sentences[i]
-    augmented_text = ' '.join(sentences)
-    return augmented_text
+synonym_aug = naw.SynonymAug(aug_src='wordnet')
+random_insert_aug = naw.ContextualWordEmbsAug(model_path='bert-base-uncased', action="insert", aug_max=1)
+random_delete_aug = naw.RandomWordAug(action="delete", aug_min=1, aug_max=1)
 
-df = pd.read_csv('./data/train.csv')
-# 应用数据增强
+def clean_text(text):
+    text = re.sub(r'@\w+', '@USER', text)
+    text = re.sub(r'#(\w+)', r'HASHTAG_\1', text)
+    text = re.sub(r'(.)\1{2,}', r'\1\1', text)
+    text = html.unescape(text)
+    text = re.sub(r'http\S+', 'URL', text)
+    return text.lower().strip()
+
+def augment_data(text, methods=['synonym', 'random_insert', 'random_delete']):
+    augmented_texts = [text]
+
+    # BART同义词替换和句子重组
+    if 'synonym' in methods:
+        inputs = bart_tokenizer.encode( text, return_tensors="pt", max_length=MAX_LEN, truncation=True)
+        inputs = inputs.to(device)
+        outputs = bart_model.generate(
+            inputs,
+            max_length=MAX_LEN,
+            num_return_sequences=1,
+            temperature=1.0,
+            num_beams=5,
+            min_length=10,
+            early_stopping=True
+        )
+        augmented_text = bart_tokenizer.decode(outputs[0], skip_special_tokens=True)
+        augmented_texts.append(augmented_text)
+
+    # 随机删除
+    if 'random_delete' in methods:
+        augmented_text = random_delete_aug.augment(text)
+        augmented_texts.append(augmented_text)
+
+    return augmented_texts
+
 all_augmented_data = []
-for _, row in df.iterrows():
+for _, row in val_df.iterrows():
     id_val = row['id']
     text = row['text']
     label = row['label']
@@ -64,26 +62,16 @@ for _, row in df.iterrows():
     if not isinstance(text, str) or pd.isnull(text):
         text = ""
 
-    # 先保留原始文本
-    all_augmented_data.append({
-        'id': id_val,
-        'text': text,
-        'label': label,
-        'event': event
-    })
+    cleaned_text = clean_text(text)
+    augmented_texts = augment_data(cleaned_text)
 
-    # 获取增强后的文本
-    augmented_text = synonym_replacement(text, 2)
-
-    # 创建新的数据行以保存增强后的文本
-    all_augmented_data.append({
-        'id': id_val,
-        'text': augmented_text,
-        'label': label,
-        'event': event
-    })
+    for aug_text in augmented_texts:
+        all_augmented_data.append({
+            'id': id_val,
+            'text': aug_text,
+            'label': label,
+            'event': event
+        })
 
 augmented_df = pd.DataFrame(all_augmented_data)
-
-# 保存增强后的数据
-augmented_df.to_csv('./data/train_augmented_data_simple.csv', index=False)
+augmented_df.to_csv('./data/val_augmented_data.csv', index=False)
